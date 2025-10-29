@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+<title>MyOTT</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#00796b"/>
+<link rel="icon" href="assets/logo.png">
+<script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+  <header class="app-header">
+    <div class="brand">
+      <img src="assets/logo.png" alt="MyOTT" class="logo">
+      <div class="titles">
+        <div class="title-main">MyOTT</div>
+        <div class="title-sub">Al-Muktafi Billah Shah</div>
+      </div>
+    </div>
+    <div class="controls">
+      <input id="playlistUrl" placeholder="Enter M3U / M3U8 URL, then Load" aria-label="playlist url">
+      <button id="loadBtn">Load</button>
+      <button id="clearBtn" title="Clear saved URL">Clear</button>
+    </div>
+  </header>
+
+  <main>
+    <section class="player-area" id="playerArea" aria-hidden="true">
+      <div class="player-inner">
+        <video id="video" controls playsinline></video>
+        <button id="closePlayer" class="close-btn" aria-label="Close player">✕</button>
+      </div>
+      <div id="nowPlaying" class="now-playing"></div>
+    </section>
+
+    <section class="grid-wrap">
+      <div id="grid" class="grid" role="list" aria-label="channel grid">
+        <!-- Channel cards appear here -->
+      </div>
+      <div id="empty" class="empty">No channels loaded. Paste M3U text or enter a playlist URL and click Load.</div>
+    </section>
+
+    <section class="paste-area">
+      <label for="m3uText">Or paste full M3U text here:</label>
+      <textarea id="m3uText" placeholder="#EXTM3U
+#EXTINF:-1,Channel name
+http://stream..."></textarea>
+      <div class="paste-actions">
+        <button id="loadTextBtn">Load from Text</button>
+        <button id="downloadSample">Sample M3U</button>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">MyOTT — Web version (PWA-ready). Use remote arrows on TV browser to focus cards.</footer>
+
+<script>
+function parseM3U(text){
+  const lines = text.split(/\r?\n/).map(l=>l.trim()).filter(l=>l.length>0);
+  const items=[];
+  let lastTitle=null;
+  for(const line of lines){
+    if(line.startsWith('#EXTINF')){
+      const idx=line.indexOf(',');
+      lastTitle = idx!==-1 ? line.slice(idx+1).trim() : line;
+    } else if(!line.startsWith('#')){
+      if(lastTitle){
+        items.push({title:lastTitle, url:line});
+        lastTitle=null;
+      } else {
+        items.push({title:line, url:line});
+      }
+    }
+  }
+  return items;
+}
+
+const grid = document.getElementById('grid');
+const empty = document.getElementById('empty');
+const playlistUrlInput = document.getElementById('playlistUrl');
+const loadBtn = document.getElementById('loadBtn');
+const clearBtn = document.getElementById('clearBtn');
+const m3uText = document.getElementById('m3uText');
+const loadTextBtn = document.getElementById('loadTextBtn');
+const downloadSample = document.getElementById('downloadSample');
+const playerArea = document.getElementById('playerArea');
+const video = document.getElementById('video');
+const closePlayer = document.getElementById('closePlayer');
+const nowPlaying = document.getElementById('nowPlaying');
+
+let channels = [];
+let hls = null;
+
+function renderGrid(list){
+  grid.innerHTML='';
+  if(!list || list.length===0){
+    empty.style.display='block';
+    return;
+  }
+  empty.style.display='none';
+  list.forEach((ch, i) => {
+    const card = document.createElement('button');
+    card.className='card';
+    card.setAttribute('role','listitem');
+    card.tabIndex=0;
+    card.innerHTML = `<div class="thumb">${getThumb(ch.title)}</div><div class="meta"><div class="name">${escapeHtml(ch.title)}</div><div class="url">${shortUrl(ch.url)}</div></div>`;
+    card.addEventListener('click', ()=> playChannel(i));
+    card.addEventListener('keydown', (e)=> {
+      if(e.key==='Enter') playChannel(i);
+    });
+    grid.appendChild(card);
+  });
+}
+
+function getThumb(title){
+  const initials = title.split(' ').slice(0,2).map(s=>s[0]).join('').toUpperCase();
+  return `<div class="initials">${initials}</div>`;
+}
+
+function shortUrl(u){
+  try{ const url = new URL(u); return url.hostname + (url.pathname||'').slice(0,12) + '...'; }catch(e){ return u.slice(0,30); }
+}
+function escapeHtml(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;'); }
+
+function playChannel(index){
+  const ch = channels[index];
+  if(!ch) return;
+  nowPlaying.textContent = ch.title;
+  openPlayer();
+  attachSource(ch.url);
+}
+
+function attachSource(url){
+  if(hls){ try{ hls.destroy(); }catch(e){} hls=null; }
+  if(Hls.isSupported()){
+    hls = new Hls();
+    hls.loadSource(url);
+    hls.attachMedia(video);
+    hls.on(Hls.Events.MANIFEST_PARSED, ()=> video.play().catch(()=>{}));
+    hls.on(Hls.Events.ERROR, (e,d)=> console.warn('HLS error', e, d));
+  } else if(video.canPlayType('application/vnd.apple.mpegurl')){
+    video.src = url;
+    video.play().catch(()=>{});
+  } else {
+    alert('This browser does not support HLS playback.');
+  }
+}
+
+function openPlayer(){ playerArea.style.display='block'; playerArea.setAttribute('aria-hidden','false'); }
+function closePlayerFn(){ playerArea.style.display='none'; playerArea.setAttribute('aria-hidden','true'); if(hls){ try{ hls.destroy(); }catch(e){} hls=null; } video.pause(); video.src=''; nowPlaying.textContent=''; }
+closePlayer.addEventListener('click', closePlayerFn);
+
+async function loadFromUrl(url){
+  if(!url) return alert('Please enter a playlist URL.');
+  try{
+    const r = await fetch(url);
+    if(!r.ok) throw new Error('Fetch failed: '+r.status);
+    const txt = await r.text();
+    channels = parseM3U(txt);
+    localStorage.setItem('myott_last_url', url);
+    localStorage.setItem('myott_last_m3u', txt);
+    renderGrid(channels);
+  }catch(e){
+    alert('Error loading playlist: ' + e.message);
+  }
+}
+
+function loadFromText(text){
+  if(!text) return alert('Paste M3U text first');
+  channels = parseM3U(text);
+  localStorage.setItem('myott_last_m3u', text);
+  renderGrid(channels);
+}
+
+loadBtn.addEventListener('click', ()=> loadFromUrl(playlistUrlInput.value.trim()));
+loadTextBtn.addEventListener('click', ()=> loadFromText(m3uText.value.trim()));
+clearBtn.addEventListener('click', ()=> {
+  localStorage.removeItem('myott_last_url');
+  localStorage.removeItem('myott_last_m3u');
+  playlistUrlInput.value='';
+  m3uText.value='';
+  channels=[];
+  renderGrid(channels);
+});
+
+downloadSample.addEventListener('click', ()=> {
+  const sample = '#EXTM3U\n#EXTINF:-1,Sample Channel 1\nhttps://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8\n#EXTINF:-1,Sample Channel 2\nhttps://bitdash-a.akamaihd.net/content/sintel/hls/playlist.m3u8';
+  const blob = new Blob([sample], {type:'text/plain'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'sample.m3u';
+  a.click();
+  URL.revokeObjectURL(url);
+});
+
+window.addEventListener('load', ()=>{
+  const lastUrl = localStorage.getItem('myott_last_url');
+  const lastM3u = localStorage.getItem('myott_last_m3u');
+  if(lastUrl) playlistUrlInput.value = lastUrl;
+  if(lastM3u){
+    m3uText.value = lastM3u;
+    channels = parseM3U(lastM3u);
+    renderGrid(channels);
+  }
+});
+
+let deferredPrompt;
+window.addEventListener('beforeinstallprompt', (e)=> {
+  e.preventDefault();
+  deferredPrompt = e;
+});
+
+document.addEventListener('keydown', (e)=> {
+  const key = e.key;
+  if(key === 'Escape' || key === 'Backspace'){
+    if(playerArea.style.display === 'block') closePlayerFn();
+  }
+});
+</script>
+</body>
+</html>

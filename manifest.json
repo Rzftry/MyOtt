@@ -1,0 +1,15 @@
+{
+  "name": "MyOTT",
+  "short_name": "MyOTT",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#00796b",
+  "theme_color": "#00796b",
+  "icons": [
+    {
+      "src": "assets/logo.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
